@@ -28,6 +28,9 @@
 // registered with RegisterProvider and instantiated from a ProviderSpec in
 // the config; the engine runs a goroutine that calls Outbounds, diffs the
 // result against the config store, and rebuilds the pool on change.
+//
+// A zero-config provider plugin may additionally declare itself the default
+// for fresh deployments with RegisterDefaultProvider; see DefaultProvider.
 package plugin
 
 import (
@@ -139,6 +142,66 @@ type Provider interface {
 
 // ProviderFactory builds a Provider from a plugin-specific config map.
 type ProviderFactory func(cfg map[string]any) (Provider, error)
+
+// DefaultProvider is a provider plugin's declaration of the zero-config
+// default the engine should seed on a fresh deployment — a config store with
+// no providers at all, such as the docker image started without a config
+// file. A zero-config plugin (one that runs on its embedded defaults with an
+// empty config map) calls RegisterDefaultProvider from its init() to make
+// itself that default; the engine asks LookupDefaultProvider at startup and,
+// when nothing is configured, seeds a provider spec from the declaration so
+// a fresh deployment is routable — and shows a provider in its admin UI —
+// out of the box.
+//
+// The engine owns the seeding policy, not the plugin: seeding is skipped
+// when any provider is already configured (an explicit provider list opts
+// out) and can be disabled by the operator. A plugin that is NOT
+// zero-config should not declare a default — a declaration whose config
+// cannot stand alone would seed a broken provider.
+type DefaultProvider struct {
+	// ID is the seeded provider spec's id. Empty means the Provider name.
+	ID string
+	// Provider is the registered provider name (RegisterProvider). Must be
+	// non-empty.
+	Provider string
+	// Config is the plugin config for the seeded spec. Nil means the
+	// zero-config form; the plugin's own defaults apply.
+	Config map[string]any
+}
+
+// defaultProvider holds the engine-wide default-provider declaration.
+var defaultProvider *DefaultProvider
+
+// RegisterDefaultProvider declares this plugin as the fresh-deployment
+// default provider (see DefaultProvider). Intended for init(). Panics when
+// another plugin already declared a default — the default slot is singular
+// and a binary linking two default-declaring plugins should fail loudly at
+// startup rather than pick an init-order winner.
+func RegisterDefaultProvider(dp DefaultProvider) {
+	mu.Lock()
+	defer mu.Unlock()
+	if dp.Provider == "" {
+		panic("plugin: RegisterDefaultProvider with empty Provider")
+	}
+	if defaultProvider != nil {
+		panic("plugin: RegisterDefaultProvider called twice (" + defaultProvider.Provider + " and " + dp.Provider + ")")
+	}
+	if dp.ID == "" {
+		dp.ID = dp.Provider
+	}
+	defaultProvider = &dp
+}
+
+// LookupDefaultProvider returns the declared fresh-deployment default
+// provider, or false when no plugin declared one.
+func LookupDefaultProvider() (DefaultProvider, bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	if defaultProvider == nil {
+		return DefaultProvider{}, false
+	}
+	return *defaultProvider, true
+}
 
 // Dialer is the minimal dial capability a plugin needs from the engine: it
 // dials a next-hop address (used when chaining). The engine provides an
