@@ -203,12 +203,82 @@ func LookupDefaultProvider() (DefaultProvider, bool) {
 	return *defaultProvider, true
 }
 
+// UpstreamDialer dials a fetch target through the upstream proxy configured
+// on a provider spec (the spec's upstream_proxy: a specific outbound, a
+// pool, or an access-pool fallback — the engine owns the reference's
+// semantics). The engine resolves the reference against live config and
+// injects the dialer into the provider's config map under the reserved
+// UpstreamDialerKey before instantiating the plugin; URL-fetching providers
+// type-assert it out with AsUpstreamDialer and wire it as their HTTP
+// transport's dialer so their downloads honor the route. The key is absent
+// (or the assertion fails) when no upstream proxy is configured — fetch
+// directly in that case.
+//
+// The returned connection is a tunnel to address: the upstream's proxy
+// handshake has already been performed, and the target protocol (TLS, HTTP,
+// ...) runs over it directly.
+type UpstreamDialer interface {
+	// DialUpstream dials address (host:port) through the provider's
+	// configured upstream proxy. network is "tcp" or "udp".
+	DialUpstream(ctx context.Context, network, address string) (net.Conn, error)
+}
+
+// UpstreamDialerKey is the reserved provider config-map key the engine uses
+// to inject an UpstreamDialer into a provider before instantiation. Plugin
+// configs must not use the "_upstream_dialer" name for their own fields.
+const UpstreamDialerKey = "_upstream_dialer"
+
+// AsUpstreamDialer extracts the engine-injected upstream dialer from a
+// provider config map, or nil when no upstream proxy is configured.
+func AsUpstreamDialer(cfg map[string]any) UpstreamDialer {
+	if cfg == nil {
+		return nil
+	}
+	d, _ := cfg[UpstreamDialerKey].(UpstreamDialer)
+	return d
+}
+
 // Dialer is the minimal dial capability a plugin needs from the engine: it
 // dials a next-hop address (used when chaining). The engine provides an
 // implementation that honors the configured stack (system or gvisor).
 type Dialer interface {
 	// DialNext dials the given address as the next hop of a chain.
 	DialNext(ctx context.Context, network string, address string) (net.Conn, error)
+}
+
+// StackDialer is the engine's layer-3/4 dial capability: a dial through the
+// engine's configured network stack — the host kernel's system stack, or the
+// userspace gvisor netstack. A plugin that embeds a proxy client and dials
+// its own servers should route those connections through the engine stack
+// instead of opening bare sockets, so the engine governs all transport.
+//
+// The engine injects its stack dialer into a provider's config map under
+// the reserved StackDialerKey ("_dialer") before instantiation — the same
+// key and value the router injects into outbound configs. Providers
+// type-assert it out with AsStackDialer and wire it into their client as
+// its underlying dialer. The key is absent when no stack dialer is
+// available; dial directly in that case.
+//
+// The address may be a domain; the dialer resolves it.
+type StackDialer interface {
+	// Dial connects to address (host:port) through the engine stack.
+	// network is "tcp" or "udp".
+	Dial(ctx context.Context, network, address string) (net.Conn, error)
+}
+
+// StackDialerKey is the reserved provider/outbound config-map key carrying
+// the engine's stack dialer. Plugin configs must not use the "_dialer" name
+// for their own fields.
+const StackDialerKey = "_dialer"
+
+// AsStackDialer extracts the engine-injected stack dialer from a provider
+// config map, or nil when none was injected.
+func AsStackDialer(cfg map[string]any) StackDialer {
+	if cfg == nil {
+		return nil
+	}
+	d, _ := cfg[StackDialerKey].(StackDialer)
+	return d
 }
 
 // registry holds all registered outbound factories by protocol name.

@@ -1,6 +1,11 @@
 package plugin
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"net"
+	"testing"
+)
 
 func TestDefaultProviderRegistry(t *testing.T) {
 	if _, ok := LookupDefaultProvider(); ok {
@@ -42,4 +47,27 @@ func TestRegisterDefaultProviderEmptyProviderPanics(t *testing.T) {
 		}
 	}()
 	RegisterDefaultProvider(DefaultProvider{ID: "x"})
+}
+
+func TestAsStackDialer(t *testing.T) {
+	if d := AsStackDialer(nil); d != nil {
+		t.Fatalf("AsStackDialer(nil) = %v, want nil", d)
+	}
+	if d := AsStackDialer(map[string]any{}); d != nil {
+		t.Fatalf("AsStackDialer({}) = %v, want nil", d)
+	}
+
+	dialer := stubStackDialer{}
+	cfg := map[string]any{StackDialerKey: dialer}
+	got := AsStackDialer(cfg)
+	if got != StackDialer(dialer) {
+		t.Fatalf("AsStackDialer did not extract the injected dialer")
+	}
+}
+
+// stubStackDialer satisfies StackDialer; it never dials.
+type stubStackDialer struct{}
+
+func (stubStackDialer) Dial(_ context.Context, _, _ string) (net.Conn, error) {
+	return nil, errors.New("not implemented")
 }
