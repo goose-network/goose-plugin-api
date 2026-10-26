@@ -143,6 +143,41 @@ type Provider interface {
 // ProviderFactory builds a Provider from a plugin-specific config map.
 type ProviderFactory func(cfg map[string]any) (Provider, error)
 
+// ProviderStatus is a plugin's live, self-reported observability view: what
+// it is doing right now, beyond the outbound set Outbounds returns. The
+// engine merges it into its per-provider status endpoint (and the web UI)
+// to answer "is this provider healthy, and what is it up to?" without an
+// operator having to read engine logs.
+//
+// Details is a flat map of scalar values for the UI: strings, numbers,
+// booleans, and string/number slices render directly. Keep it small —
+// it is polled, not streamed.
+type ProviderStatus struct {
+	// State is a short, human-readable phase word, e.g. "running",
+	// "establishing", "error". Plugins pick their own vocabulary; the
+	// engine surfaces it verbatim.
+	State string `json:"state"`
+	// Message is one line of context for the state, e.g. the last error or
+	// a progress note. Empty means "nothing to say".
+	Message string `json:"message"`
+	// Details carries plugin-specific live facts (counts, addresses,
+	// timestamps). Keys are the plugin's own; the UI renders them as-is.
+	Details map[string]any `json:"details,omitempty"`
+}
+
+// StatusReporter is the optional interface a Provider implements to expose
+// its live status. The engine polls it alongside Outbounds for its
+// observability endpoint; a provider that does not implement it is still
+// fully functional — the engine reports only what it can observe itself
+// (poll times, errors, outbound counts).
+type StatusReporter interface {
+	// Status returns the provider's current self-assessment. It must be
+	// cheap, non-blocking, and safe to call concurrently; a panic inside is
+	// the plugin's bug, but a slow Status stalls the status endpoint, so
+	// keep it to an in-memory snapshot.
+	Status() ProviderStatus
+}
+
 // DefaultProvider is a provider plugin's declaration of the zero-config
 // default the engine should seed on a fresh deployment — a config store with
 // no providers at all, such as the docker image started without a config
