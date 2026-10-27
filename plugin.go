@@ -238,33 +238,41 @@ func LookupDefaultProvider() (DefaultProvider, bool) {
 	return *defaultProvider, true
 }
 
-// UpstreamDialer dials a fetch target through the upstream proxy configured
-// on a provider spec (the spec's upstream_proxy: a specific outbound, a
-// pool, or an access-pool fallback — the engine owns the reference's
-// semantics). The engine resolves the reference against live config and
-// injects the dialer into the provider's config map under the reserved
-// UpstreamDialerKey before instantiating the plugin; URL-fetching providers
-// type-assert it out with AsUpstreamDialer and wire it as their HTTP
-// transport's dialer so their downloads honor the route. The key is absent
-// (or the assertion fails) when no upstream proxy is configured — fetch
-// directly in that case.
+// UpstreamDialer dials a target through an engine-managed upstream route
+// (the spec's upstream_proxy: a specific outbound, a pool, a multi-hop
+// chain, or a provider's access-pool fallback — the engine owns the
+// reference's semantics, re-resolved against live config per dial). The
+// engine injects the dialer into a config map under the reserved
+// UpstreamDialerKey before instantiating the plugin:
+//
+//   - provider specs: the route a provider's own URL fetches ride, so
+//     downloads reach blocked sources through a working proxy;
+//   - outbound specs: the route an outbound's own connection to its proxy
+//     server rides (the "access" form is provider-only there).
+//
+// URL-fetching providers type-assert it out with AsUpstreamDialer and wire
+// it as their HTTP transport's dialer; outbounds route their server dials
+// through it. The key is absent (or the assertion fails) when no upstream
+// proxy is configured — fall back to the StackDialer, or dial directly.
 //
 // The returned connection is a tunnel to address: the upstream's proxy
 // handshake has already been performed, and the target protocol (TLS, HTTP,
 // ...) runs over it directly.
 type UpstreamDialer interface {
-	// DialUpstream dials address (host:port) through the provider's
-	// configured upstream proxy. network is "tcp" or "udp".
+	// DialUpstream dials address (host:port) through the configured upstream
+	// proxy route. network is "tcp" or "udp".
 	DialUpstream(ctx context.Context, network, address string) (net.Conn, error)
 }
 
-// UpstreamDialerKey is the reserved provider config-map key the engine uses
-// to inject an UpstreamDialer into a provider before instantiation. Plugin
-// configs must not use the "_upstream_dialer" name for their own fields.
+// UpstreamDialerKey is the reserved provider/outbound config-map key the
+// engine uses to inject an UpstreamDialer into a plugin before
+// instantiation. Plugin configs must not use the "_upstream_dialer" name
+// for their own fields.
 const UpstreamDialerKey = "_upstream_dialer"
 
 // AsUpstreamDialer extracts the engine-injected upstream dialer from a
-// provider config map, or nil when no upstream proxy is configured.
+// provider or outbound config map, or nil when no upstream proxy is
+// configured.
 func AsUpstreamDialer(cfg map[string]any) UpstreamDialer {
 	if cfg == nil {
 		return nil
