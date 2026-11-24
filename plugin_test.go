@@ -8,36 +8,45 @@ import (
 )
 
 func TestDefaultProviderRegistry(t *testing.T) {
-	if _, ok := LookupDefaultProvider(); ok {
-		t.Fatal("no default declared yet, LookupDefaultProvider should report false")
-	}
-
 	RegisterDefaultProvider(DefaultProvider{Provider: "zero-config"})
 
-	got, ok := LookupDefaultProvider()
-	if !ok {
-		t.Fatal("default declared, LookupDefaultProvider should report it")
+	// An omitted ID defaults to the provider name; Config stays nil (the
+	// zero-config form).
+	var dc *DefaultProvider
+	for _, d := range LookupDefaultProviders() {
+		if d.Provider == "zero-config" {
+			dc = &d
+			break
+		}
 	}
-	if got.Provider != "zero-config" {
-		t.Fatalf("Provider = %q, want %q", got.Provider, "zero-config")
+	if dc == nil {
+		t.Fatal("declared default not returned by LookupDefaultProviders")
 	}
-	// An omitted ID defaults to the provider name.
-	if got.ID != "zero-config" {
-		t.Fatalf("ID = %q, want it defaulted to the provider name %q", got.ID, "zero-config")
+	if dc.ID != "zero-config" {
+		t.Fatalf("ID = %q, want it defaulted to the provider name %q", dc.ID, "zero-config")
 	}
-	if got.Config != nil {
-		t.Fatalf("Config = %v, want nil (zero-config form)", got.Config)
+	if dc.Config != nil {
+		t.Fatalf("Config = %v, want nil (zero-config form)", dc.Config)
+	}
+	if _, ok := LookupDefaultProvider(); !ok {
+		t.Fatal("legacy singular LookupDefaultProvider should report a declared default")
 	}
 
-	// A second declaration panics: the default slot is singular, and a
-	// binary linking two default-declaring plugins should fail at startup
-	// instead of picking an init-order winner.
+	// Declarations accumulate: a second, different plugin does NOT panic —
+	// the engine seeds every zero-config plugin linked into the binary.
+	RegisterDefaultProvider(DefaultProvider{Provider: "other"})
+	if len(LookupDefaultProviders()) < 2 {
+		t.Fatal("two distinct declarations should accumulate")
+	}
+
+	// The same provider name declared twice panics: a plugin registering
+	// itself twice is a bug.
 	defer func() {
 		if recover() == nil {
-			t.Fatal("second RegisterDefaultProvider should panic")
+			t.Fatal("duplicate RegisterDefaultProvider should panic")
 		}
 	}()
-	RegisterDefaultProvider(DefaultProvider{Provider: "other"})
+	RegisterDefaultProvider(DefaultProvider{Provider: "zero-config"})
 }
 
 func TestRegisterDefaultProviderEmptyProviderPanics(t *testing.T) {

@@ -29,13 +29,16 @@
 // the config; the engine runs a goroutine that calls Outbounds, diffs the
 // result against the config store, and rebuilds the pool on change.
 //
-// A zero-config provider plugin may additionally declare itself the default
-// for fresh deployments with RegisterDefaultProvider; see DefaultProvider.
+// A zero-config provider plugin may additionally declare itself an auto-seeded
+// default with RegisterDefaultProvider; the engine seeds every such plugin
+// that is not already configured, so it appears in the admin UI and retrieves
+// its servers without operator setup. See DefaultProvider.
 package plugin
 
 import (
 	"context"
 	"net"
+	"sort"
 	"sync"
 	"time"
 )
@@ -178,19 +181,19 @@ type StatusReporter interface {
 	Status() ProviderStatus
 }
 
-// DefaultProvider is a provider plugin's declaration of the zero-config
-// default the engine should seed on a fresh deployment — a config store with
-// no providers at all, such as the docker image started without a config
-// file. A zero-config plugin (one that runs on its embedded defaults with an
-// empty config map) calls RegisterDefaultProvider from its init() to make
-// itself that default; the engine asks LookupDefaultProvider at startup and,
-// when nothing is configured, seeds a provider spec from the declaration so
-// a fresh deployment is routable — and shows a provider in its admin UI —
-// out of the box.
+// DefaultProvider is a provider plugin's declaration of a zero-config default
+// the engine auto-seeds so the plugin appears — and retrieves its proxy
+// servers — without the operator configuring it in goose.json. A zero-config
+// plugin (one that runs on its embedded defaults with an empty config map)
+// calls RegisterDefaultProvider from its init(); the engine asks
+// LookupDefaultProviders at startup and seeds every declaration whose plugin
+// is not already configured. A fresh deployment is thus routable — and shows
+// providers in its admin UI — out of the box, and a deployment that already
+// configures some providers still gains the newly-linked zero-config ones.
 //
-// The engine owns the seeding policy, not the plugin: seeding is skipped
-// when any provider is already configured (an explicit provider list opts
-// out) and can be disabled by the operator. A plugin that is NOT
+// The engine owns the seeding policy, not the plugin: a declaration whose
+// plugin is already configured is skipped (an explicit spec for that plugin
+// opts out), and the operator can disable all seeding. A plugin that is NOT
 // zero-config should not declare a default — a declaration whose config
 // cannot stand alone would seed a broken provider.
 type DefaultProvider struct {
@@ -204,38 +207,63 @@ type DefaultProvider struct {
 	Config map[string]any
 }
 
-// defaultProvider holds the engine-wide default-provider declaration.
-var defaultProvider *DefaultProvider
+// defaultProviders holds the engine-wide zero-config default-provider
+// declarations, keyed by provider name. Every plugin that can retrieve proxy
+// servers from its embedded defaults declares itself here; the engine seeds
+// each declaration whose plugin is not already configured.
+var defaultProviders = map[string]*DefaultProvider{}
 
-// RegisterDefaultProvider declares this plugin as the fresh-deployment
-// default provider (see DefaultProvider). Intended for init(). Panics when
-// another plugin already declared a default — the default slot is singular
-// and a binary linking two default-declaring plugins should fail loudly at
-// startup rather than pick an init-order winner.
+// RegisterDefaultProvider declares this plugin as a zero-config default the
+// engine auto-seeds (see DefaultProvider). Intended for init(). Declarations
+// accumulate — one per plugin — so a binary linking several zero-config
+// plugins seeds them all. Panics when the same provider name is declared
+// twice (a plugin registering itself twice is a bug) or Provider is empty.
 func RegisterDefaultProvider(dp DefaultProvider) {
 	mu.Lock()
 	defer mu.Unlock()
 	if dp.Provider == "" {
 		panic("plugin: RegisterDefaultProvider with empty Provider")
 	}
-	if defaultProvider != nil {
-		panic("plugin: RegisterDefaultProvider called twice (" + defaultProvider.Provider + " and " + dp.Provider + ")")
+	if _, dup := defaultProviders[dp.Provider]; dup {
+		panic("plugin: RegisterDefaultProvider called twice for " + dp.Provider)
 	}
 	if dp.ID == "" {
 		dp.ID = dp.Provider
 	}
-	defaultProvider = &dp
+	defaultProviders[dp.Provider] = &dp
 }
 
-// LookupDefaultProvider returns the declared fresh-deployment default
-// provider, or false when no plugin declared one.
+// LookupDefaultProviders returns every declared zero-config default provider,
+// sorted by provider name for deterministic seeding. The engine seeds each
+// one whose plugin is not already configured. Empty when no plugin declared a
+// default.
+func LookupDefaultProviders() []DefaultProvider {
+	mu.RLock()
+	defer mu.RUnlock()
+	out := make([]DefaultProvider, 0, len(defaultProviders))
+	for _, dp := range defaultProviders {
+		out = append(out, *dp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
+	return out
+}
+
+// LookupDefaultProvider returns the first declared default provider (by
+// provider name), or false when none is declared. Legacy singular accessor;
+// new code uses LookupDefaultProviders to seed every zero-config plugin.
 func LookupDefaultProvider() (DefaultProvider, bool) {
 	mu.RLock()
 	defer mu.RUnlock()
-	if defaultProvider == nil {
+	if len(defaultProviders) == 0 {
 		return DefaultProvider{}, false
 	}
-	return *defaultProvider, true
+	first := ""
+	for name := range defaultProviders {
+		if first == "" || name < first {
+			first = name
+		}
+	}
+	return *defaultProviders[first], true
 }
 
 // UpstreamDialer dials a target through an engine-managed upstream route
