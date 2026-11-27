@@ -267,16 +267,15 @@ func LookupDefaultProvider() (DefaultProvider, bool) {
 }
 
 // UpstreamDialer dials a target through an engine-managed upstream route
-// (the spec's upstream_proxy: a specific outbound, a pool, a multi-hop
-// chain, or a provider's access-pool fallback — the engine owns the
-// reference's semantics, re-resolved against live config per dial). The
-// engine injects the dialer into a config map under the reserved
-// UpstreamDialerKey before instantiating the plugin:
+// (the spec's upstream_proxy: a specific outbound, a pool, or a multi-hop
+// chain — the engine owns the reference's semantics, re-resolved against
+// live config per dial). The engine injects the dialer into a config map
+// under the reserved UpstreamDialerKey before instantiating the plugin:
 //
 //   - provider specs: the route a provider's own URL fetches ride, so
 //     downloads reach blocked sources through a working proxy;
 //   - outbound specs: the route an outbound's own connection to its proxy
-//     server rides (the "access" form is provider-only there).
+//     server rides.
 //
 // URL-fetching providers type-assert it out with AsUpstreamDialer and wire
 // it as their HTTP transport's dialer; outbounds route their server dials
